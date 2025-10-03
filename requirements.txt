@@ -1,0 +1,12 @@
+asgiref
+Django
+joblib
+numpy
+opencv-python-headless
+Pillow
+pytz
+scikit-learn
+scipy
+sqlparse
+threadpoolctl
+typing-extensions

@@ -2,7 +2,7 @@ asgiref
 Django
 joblib
 numpy
-opencv-python-headless
+opencv-python
 Pillow
 pytz
 scikit-learn

@@ -1,33 +1,80 @@
 import numpy as np
-from imutils import face_utils
+import pandas as pd
 import cv2
-import dlib
+import os
+import pickle
 
 
-# Shape Detector
-shape_detector = dlib.shape_predictor('./models/shape_predictor_68_face_landmarks.dat')
+face_detection_model = './models/res10_300x300_ssd_iter_140000_fp16.caffemodel'
+face_detection_prot = './models/deploy.prototxt.txt'
+face_descriptor = './models/openface.nn4.small2.v1.t7'
 
-# face descriptor
-shape_descriptor = dlib.face_recognition_model_v1('./models/dlib_face_recognition_resnet_model_v1.dat')
+# load models
+detector_model = cv2.dnn.readNetFromCaffe(face_detection_prot, face_detection_model)
+descriptor_model = cv2.dnn.readNetFromTorch(face_descriptor)
+
 
 img = cv2.imread('./images/face.jpg')
 
 image = img.copy()
+h,w = image.shape[:2]
 
-face_detector = dlib.get_frontal_face_detector()
-faces = face_detector(image)
+img_blob = cv2.dnn.blobFromImage(image,1,(300,300),(104,177,123),swapRB=False,crop=False)
+detector_model.setInput(img_blob)
 
-for box in faces:
-    pt1 = box.left(),box.top()
-    pt2 = box.right(),box.bottom()
+detections = detector_model.forward()
 
-    face_shape = shape_detector(image,box)
-    face_shape_array = face_utils.shape_to_np(face_shape,"int")
-    # face_descriptor = shape_detector.compute_face_descriptor(image,face_shape)
+def helper(image_path):
+    img = cv2.imread(image_path)
+    # step-1: face detection
+    image = img.copy()
+    h,w = image.shape[:2]
+    img_blob = cv2.dnn.blobFromImage(image,1,(300,300),(104,177,123),swapRB=False,crop=False)
+    # set the input
+    detector_model.setInput(img_blob)
+    detections = detector_model.forward()
 
-    for point in face_shape_array:
-        cv2.circle(image,tuple(point),3,(0,255,0),-1)
-        cv2.rectangle(image,pt1,pt2,(0,255,0),3)
+    if len(detections) > 0:
+        i = np.argmax(detections[0,0,:,2])
+        confidence = detections[0,0,i,2]
+        if confidence > 0.5:
+            box = detections[0,0,i,3:7]*np.array([w,h,w,h])
+            (startx,starty,endx,endy) = box.astype('int')
+            # step-2: Feature Extraction or Embedding
+            roi = image[starty:endy,startx:endx].copy()
+            # get the face descriptors
+            faceblob = cv2.dnn.blobFromImage(roi,1/255,(96,96),(0,0,0),swapRB=True,crop=True)
+            descriptor_model.setInput(faceblob)
+            vectors = descriptor_model.forward()
+            
+            return vectors
+    return None
+
+
+data = dict(data=[], label=[])
+
+folders = os.listdir('people-images')
+for folder in folders:
+    filenames = os.listdir('people-images/{}'.format(folder))
+    for filename in filenames:
+        try:
+            vector = helper('./people-images/{}/{}'.format(folder, filename))
+            if vector is not None:
+                data['data'].append(vector)
+                data['label'].append(folder)
+        except:
+            print('error')
+
+for i in range(0,detections.shape[2]):
+    confidence = detections[0,0,i,2]
+
+    if confidence > 0.5:
+        box = detections[0,0,i,3:7] * [w,h,w,h]
+        (x1,y1,x2,y2) = box.astype("int")
+        cv2.rectangle(image,(x1,y1),(x2,y2),(0,255,0),2)
+
+pickle.dump(data,open('data_face_features.pickle', mode='wb'))
+
 
 cv2.imshow('Faces', image)
 cv2.waitKey(0)

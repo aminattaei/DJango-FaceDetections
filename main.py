@@ -1,68 +1,79 @@
 import numpy as np
-import pandas as pd
-import cv2
-import os
 import pickle
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
+from sklearn.ensemble import RandomForestClassifier, VotingClassifier
+from sklearn.metrics import accuracy_score, f1_score
 
-# مدل‌ها
-face_detection_model = './models/res10_300x300_ssd_iter_140000_fp16.caffemodel'
-face_detection_prot = './models/deploy.prototxt.txt'
-face_descriptor = './models/openface.nn4.small2.v1.t7'
+# ---------------------------
+# 1. Load Data
+# ---------------------------
+data = pickle.load(open('data_face_features.pickle', mode='rb'))
 
-# بارگذاری مدل‌ها
-detector_model = cv2.dnn.readNetFromCaffe(face_detection_prot, face_detection_model)
-descriptor_model = cv2.dnn.readNetFromTorch(face_descriptor)
+x = np.array(data['data'])
+y = np.array(data['label'])
 
+# هر بردار ۱۲۸ ویژگی داره (از مدل openface)
+x = x.reshape(-1, 128)
 
-def extract_face_vector(image_path):
-    img = cv2.imread(image_path)
-    if img is None:
-        return None
+# ---------------------------
+# 2. Split Train / Test
+# ---------------------------
+x_train, x_test, y_train, y_test = train_test_split(
+    x, y, train_size=0.8, random_state=0
+)
 
-    image = img.copy()
-    h, w = image.shape[:2]
+# ---------------------------
+# 3. Normalize Data
+# ---------------------------
+scaler = StandardScaler()
+x_train = scaler.fit_transform(x_train)
+x_test = scaler.transform(x_test)
 
-    # تشخیص چهره
-    blob = cv2.dnn.blobFromImage(image, 1, (300, 300), (104, 177, 123), swapRB=False, crop=False)
-    detector_model.setInput(blob)
-    detections = detector_model.forward()
+# ---------------------------
+# 4. Define Models
+# ---------------------------
+model_logistic = LogisticRegression(max_iter=1000)
+model_svm = SVC(kernel='linear', probability=True)
+model_rf = RandomForestClassifier(n_estimators=100, random_state=0)
 
-    if len(detections) > 0:
-        i = np.argmax(detections[0, 0, :, 2])
-        confidence = detections[0, 0, i, 2]
+# ---------------------------
+# 5. Create Voting Classifier
+# ---------------------------
+voting = VotingClassifier(
+    estimators=[
+        ('lr', model_logistic),
+        ('svm', model_svm),
+        ('rf', model_rf)
+    ],
+    voting='soft'
+)
 
-        if confidence > 0.5:
-            box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
-            (x1, y1, x2, y2) = box.astype('int')
+# ---------------------------
+# 6. Train the model
+# ---------------------------
+voting.fit(x_train, y_train)
 
-            roi = image[y1:y2, x1:x2].copy()
-            if roi.size == 0:
-                return None
+# ---------------------------
+# 7. Evaluate function
+# ---------------------------
+def get_report(model, x_train, y_train, x_test, y_test):
+    y_pred_train = model.predict(x_train)
+    y_pred_test = model.predict(x_test)
 
-            face_blob = cv2.dnn.blobFromImage(roi, 1 / 255, (96, 96), (0, 0, 0), swapRB=True, crop=True)
-            descriptor_model.setInput(face_blob)
-            vector = descriptor_model.forward()
+    acc_train = accuracy_score(y_train, y_pred_train)
+    acc_test = accuracy_score(y_test, y_pred_test)
+    f1_train = f1_score(y_train, y_pred_train, average='macro')
+    f1_test = f1_score(y_test, y_pred_test, average='macro')
 
-            return vector
-    return None
+    print("Accuracy Train:", acc_train)
+    print("Accuracy Test:", acc_test)
+    print("F1 Score Train:", f1_train)
+    print("F1 Score Test:", f1_test)
 
-
-# آماده‌سازی داده‌ها
-data = {'data': [], 'label': []}
-
-for person in os.listdir('people-images'):
-    folder_path = os.path.join('people-images', person)
-    for filename in os.listdir(folder_path):
-        file_path = os.path.join(folder_path, filename)
-        try:
-            vector = extract_face_vector(file_path)
-            if vector is not None:
-                data['data'].append(vector)
-                data['label'].append(person)
-        except Exception as e:
-            print(f'Error processing {file_path}:', e)
-
-# ذخیره داده‌ها
-pickle.dump(data, open('data_face_features.pickle', 'wb'))
-print('Feature data saved successfully!')
-
+# ---------------------------
+# 8. Run Report
+# ---------------------------
+get_report(voting, x_train, y_train, x_test, y_test)
